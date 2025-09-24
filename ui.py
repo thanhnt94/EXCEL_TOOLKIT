@@ -82,6 +82,7 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.ok_button = customtkinter.CTkButton(button_frame, command=self.on_ok)
         self.ok_button.pack(side="right", padx=(0, 10))
         
+        self._min_dialog_width = 570
         self.update_text()
 
     def update_master_checkbox_state(self):
@@ -316,7 +317,11 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
     def _update_dialog_geometry(self):
         self.update_idletasks()
 
-        required_width = max(self._dialog_width, self.winfo_reqwidth())
+        min_width = getattr(self, "_min_dialog_width", 0) or 0
+        if min_width <= 0:
+            min_width = 570
+
+        required_width = max(min_width, self.winfo_reqwidth())
         required_height = self.winfo_reqheight()
 
         max_height = self.winfo_screenheight() - 120
