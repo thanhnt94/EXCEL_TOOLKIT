@@ -53,6 +53,7 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.task_option_pack_opts = {}
         self._bulk_toggle_in_progress = False
         self._has_grab = False
+        self._grab_retry_job = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -106,11 +107,27 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self._apply_modal_grab()
 
     def _apply_modal_grab(self):
+        if not self.winfo_exists():
+            return
+
         try:
             self.grab_set()
             self._has_grab = True
+            if self._grab_retry_job:
+                try:
+                    self.after_cancel(self._grab_retry_job)
+                except tk.TclError:
+                    pass
+                finally:
+                    self._grab_retry_job = None
         except tk.TclError:
-            self.after(20, self._apply_modal_grab)
+            if self.winfo_exists():
+                if self._grab_retry_job:
+                    try:
+                        self.after_cancel(self._grab_retry_job)
+                    except tk.TclError:
+                        pass
+                self._grab_retry_job = self.after(20, self._apply_modal_grab)
 
     def update_master_checkbox_state(self):
         all_tasks = self.tasks_vars.values()
@@ -388,6 +405,13 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
                 pass
             finally:
                 self._has_grab = False
+        if self._grab_retry_job:
+            try:
+                self.after_cancel(self._grab_retry_job)
+            except tk.TclError:
+                pass
+            finally:
+                self._grab_retry_job = None
         if self.winfo_exists():
             self.destroy()
 
