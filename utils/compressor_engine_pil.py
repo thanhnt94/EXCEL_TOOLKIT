@@ -24,6 +24,8 @@ msoBringToFront = 0
 msoSendToBack = 1
 msoBringForward = 2
 msoSendBackward = 3
+msoTrue = -1
+msoFalse = 0
 
 def _doevents_pulse():
     """Bơm message queue để COM không treo."""
@@ -101,6 +103,34 @@ def _snapshot_shape_props(shape):
         pass
     return props
 
+def _normalize_lock_value(value):
+    """Chuẩn hoá LockAspectRatio sang tuple (bool, hằng số mso)."""
+
+    if value is None:
+        return None, None
+
+    if isinstance(value, bool):
+        return value, msoTrue if value else msoFalse
+
+    try:
+        intval = int(value)
+    except (TypeError, ValueError):
+        return None, None
+
+    if intval == msoTrue:
+        return True, msoTrue
+    if intval == msoFalse:
+        return False, msoFalse
+
+    # Một số phiên bản COM trả về 1 thay vì -1
+    if intval == 1:
+        return True, msoTrue
+    if intval == 0:
+        return False, msoFalse
+
+    return None, None
+
+
 def _apply_props_to_picture(pic, props):
     """
     Áp lại các thuộc tính đã chụp cho ảnh mới chèn.
@@ -113,27 +143,53 @@ def _apply_props_to_picture(pic, props):
     except Exception as e:
         logging.warning(f"    -> Lỗi khi áp dụng tên: {e}")
 
+    lock_bool, lock_mso = _normalize_lock_value(props.get('lock_aspect'))
+
     try:
-        logging.debug("    -> Áp dụng vị trí và kích thước...")
+        logging.debug("    -> Áp dụng vị trí...")
         pic.left = props['left']
         pic.top = props['top']
+    except Exception as e:
+        logging.warning(f"    -> Lỗi khi áp dụng vị trí: {e}")
+
+    # Nếu ảnh cũ bị khoá tỉ lệ, Excel sẽ không cho đặt width/height độc lập.
+    # Ta tạm mở khoá (nếu cần) để đảm bảo kích thước khớp tuyệt đối.
+    temporary_unlock = False
+    if lock_bool:
+        try:
+            current_lock = pic.api.LockAspectRatio
+            if current_lock not in (msoFalse, 0):
+                pic.api.LockAspectRatio = msoFalse
+                temporary_unlock = True
+        except Exception as e:
+            logging.debug(f"    -> Không thể mở khoá tỉ lệ tạm thời: {e}")
+
+    try:
+        logging.debug("    -> Áp dụng kích thước...")
         pic.width = props['width']
         pic.height = props['height']
     except Exception as e:
-        logging.warning(f"    -> Lỗi khi áp dụng vị trí và kích thước: {e}")
+        logging.warning(f"    -> Lỗi khi áp dụng kích thước: {e}")
+
+    if temporary_unlock and lock_mso is not None:
+        try:
+            pic.api.LockAspectRatio = lock_mso
+        except Exception as e:
+            logging.warning(f"    -> Không thể khôi phục trạng thái khoá tỉ lệ ban đầu: {e}")
 
     try:
-        if props['rotation'] != 0:
+        if props['rotation']:
             logging.debug(f"    -> Áp dụng xoay với giá trị: {props['rotation']}...")
             api.Rotation = props['rotation']
     except Exception as e:
         logging.warning(f"    -> Lỗi khi áp dụng xoay: {e}")
 
-    try:
-        logging.debug("    -> Áp dụng khóa tỉ lệ...")
-        api.LockAspectRatio = props['lock_aspect']
-    except Exception as e:
-        logging.warning(f"    -> Lỗi khi áp dụng khóa tỉ lệ: {e}")
+    if lock_mso is not None and not temporary_unlock:
+        try:
+            logging.debug("    -> Áp dụng khóa tỉ lệ...")
+            api.LockAspectRatio = lock_mso
+        except Exception as e:
+            logging.warning(f"    -> Lỗi khi áp dụng khóa tỉ lệ: {e}")
 
     try:
         logging.debug("    -> Áp dụng placement...")
