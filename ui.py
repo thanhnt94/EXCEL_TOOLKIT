@@ -42,6 +42,7 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.withdraw()
         self._parent = parent
         self.tasks_vars, self.result = {}, []
+        self.task_checkboxes = {}
         self.engine_var = None
         self.engine_menu = None
         self.quality_var = None
@@ -50,6 +51,7 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.label_text_var = None
         self.task_option_frames = {}
         self.task_option_pack_opts = {}
+        self._bulk_toggle_in_progress = False
         self._has_grab = False
 
         self.grid_columnconfigure(0, weight=1)
@@ -112,21 +114,35 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
 
     def update_master_checkbox_state(self):
         all_tasks = self.tasks_vars.values()
-        if not all_tasks: return
+        if not all_tasks:
+            return
+
         all_on = all(var.get() == "on" for var in all_tasks)
-        
         if all_on:
-            self.master_checkbox.select()
+            self.master_checkbox_var.set("on")
         else:
-            self.master_checkbox.deselect()
+            self.master_checkbox_var.set("off")
 
     def toggle_all_tasks(self):
-        new_state = self.master_checkbox_var.get()
-        for var in self.tasks_vars.values():
-            var.set(new_state)
+        new_state_is_on = self.master_checkbox_var.get() == "on"
+
+        self._bulk_toggle_in_progress = True
+        try:
+            for task_id, checkbox in self.task_checkboxes.items():
+                if new_state_is_on:
+                    checkbox.select()
+                else:
+                    checkbox.deselect()
+        finally:
+            self._bulk_toggle_in_progress = False
+
+        self.update_master_checkbox_state()
         self.check_options_visibility()
 
     def on_task_changed(self):
+        if self._bulk_toggle_in_progress:
+            return
+
         self.update_master_checkbox_state()
         self.check_options_visibility()
         
@@ -272,8 +288,10 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         for widget in self.tasks_container.winfo_children():
             widget.destroy()
         self.tasks_vars = {}
+        self.task_checkboxes = {}
         self.task_option_frames = {}
         self.task_option_pack_opts = {}
+        self._bulk_toggle_in_progress = False
 
         for cat_key, tasks in tasks_structure.items():
             category_name = translator.get_text(cat_key)
@@ -285,9 +303,17 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
                 var = customtkinter.StringVar(value="off")
                 task_frame = customtkinter.CTkFrame(self.tasks_container, fg_color="transparent")
                 task_frame.pack(fill="x", padx=(20,0))
-                cb = customtkinter.CTkCheckBox(task_frame, text=task_name, variable=var, onvalue="on", offvalue="off", command=self.on_task_changed)
+                cb = customtkinter.CTkCheckBox(
+                    task_frame,
+                    text=task_name,
+                    variable=var,
+                    onvalue="on",
+                    offvalue="off",
+                    command=self.on_task_changed
+                )
                 cb.pack(anchor="w", padx=10, pady=2)
                 self.tasks_vars[task_id] = var
+                self.task_checkboxes[task_id] = cb
 
                 option_frame = customtkinter.CTkFrame(task_frame, fg_color="transparent")
                 pack_opts = {"fill": "x", "padx": (35, 0), "pady": (0, 5), "anchor": "w"}
