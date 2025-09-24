@@ -41,7 +41,15 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         super().__init__(parent)
         self.transient(parent); self.grab_set()
         self.tasks_vars, self.result = {}, []
-        self.engine_var, self.quality_var, self.label_text_var = None, None, None
+        self._dialog_width = 570
+        self.engine_var = None
+        self.engine_menu = None
+        self.quality_var = None
+        self.quality_entry = None
+        self.quality_label = None
+        self.label_text_var = None
+        self.task_option_frames = {}
+        self.task_option_pack_opts = {}
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -54,15 +62,18 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.label.grid(row=0, column=0, pady=(0, 10), sticky="w")
 
         self.master_checkbox_var = customtkinter.StringVar(value="off")
-        self.master_checkbox = customtkinter.CTkCheckBox(main_frame, command=self.toggle_all_tasks, variable=self.master_checkbox_var, onvalue="on", offvalue="off")
+        self.master_checkbox = customtkinter.CTkCheckBox(
+            main_frame,
+            command=self.toggle_all_tasks,
+            variable=self.master_checkbox_var,
+            onvalue="on",
+            offvalue="off"
+        )
         self.master_checkbox.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="w")
         
         self.tasks_container = customtkinter.CTkFrame(main_frame, fg_color="transparent")
         self.tasks_container.grid(row=2, column=0, sticky="nsew")
         self.tasks_container.grid_columnconfigure(0, weight=1)
-
-        self.options_frame = customtkinter.CTkFrame(main_frame, fg_color="transparent")
-        self.options_frame.grid(row=3, column=0, pady=(5,0), sticky="ew")
 
         button_frame = customtkinter.CTkFrame(self, fg_color="transparent")
         button_frame.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")
@@ -73,7 +84,6 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.ok_button.pack(side="right", padx=(0, 10))
         
         self.update_text()
-        self.check_options_visibility()
 
     def update_master_checkbox_state(self):
         all_tasks = self.tasks_vars.values()
@@ -96,41 +106,113 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.check_options_visibility()
         
     def check_options_visibility(self, event=None):
-        for widget in self.options_frame.winfo_children():
+        add_label_var = self.tasks_vars.get("add_label")
+        should_show_label_options = add_label_var and add_label_var.get() == "on"
+        self._render_option(
+            "add_label",
+            should_show_label_options,
+            self._build_add_label_options,
+            reset_callback=lambda: setattr(self, "label_text_var", None)
+        )
+
+        compress_var = self.tasks_vars.get("compress_all_images")
+        should_show_compress_options = compress_var and compress_var.get() == "on"
+        self._render_option(
+            "compress_all_images",
+            should_show_compress_options,
+            self._build_compress_options,
+            reset_callback=self._reset_compress_state
+        )
+
+    def _render_option(self, task_id, should_show, builder, reset_callback=None):
+        frame = self.task_option_frames.get(task_id)
+        if not frame:
+            return
+
+        for widget in frame.winfo_children():
             widget.destroy()
 
-        if self.tasks_vars.get("add_label", customtkinter.StringVar()).get() == "on":
-            label_frame = customtkinter.CTkFrame(self.options_frame, fg_color="transparent")
-            label_frame.pack(fill="x", pady=(0, 5), anchor="w")
+        if should_show:
+            pack_opts = self.task_option_pack_opts.get(task_id, {})
+            frame.pack(**pack_opts)
+            builder(frame)
+        else:
+            frame.pack_forget()
+            if reset_callback:
+                reset_callback()
 
-            label_option_label = customtkinter.CTkLabel(label_frame, text=translator.get_text("task_add_label_option_label"), font=customtkinter.CTkFont(weight="bold"))
-            label_option_label.pack(side="left", padx=(10, 5))
-            
-            label_options = ["Nissan Confidential C", "Nissan Confidential A", "Nissan Confidential B"]
-            self.label_text_var = customtkinter.StringVar(value=label_options[0])
-            label_option_menu = customtkinter.CTkOptionMenu(label_frame, values=label_options, variable=self.label_text_var)
-            label_option_menu.pack(side="left")
+        self._update_dialog_geometry()
 
-        if self.tasks_vars.get("compress_all_images", customtkinter.StringVar()).get() == "on":
-            compress_frame = customtkinter.CTkFrame(self.options_frame, fg_color="transparent")
-            compress_frame.pack(fill="x", pady=(5, 0), anchor="w")
-            
-            compress_option_label = customtkinter.CTkLabel(compress_frame, text=translator.get_text("task_compress_all_images_engine_label"), font=customtkinter.CTkFont(weight="bold"))
-            compress_option_label.pack(side="left", padx=(10, 5))
-            
-            self.engine_var = customtkinter.StringVar(value=translator.get_text("engine_pil"))
-            self.engine_menu = customtkinter.CTkOptionMenu(compress_frame, values=[translator.get_text("engine_pil"), translator.get_text("engine_spire")], variable=self.engine_var, command=self.update_compression_options)
-            self.engine_menu.pack(side="left")
+    def _build_add_label_options(self, frame):
+        frame.grid_columnconfigure(1, weight=1)
 
-            self.quality_label = customtkinter.CTkLabel(compress_frame, text="", font=customtkinter.CTkFont(weight="bold"))
-            self.quality_label.pack(side="left", padx=(15, 5))
-            self.quality_var = customtkinter.StringVar()
-            self.quality_entry = customtkinter.CTkEntry(compress_frame, width=60, textvariable=self.quality_var)
-            self.quality_entry.pack(side="left")
+        label_option_label = customtkinter.CTkLabel(
+            frame,
+            text=translator.get_text("task_add_label_option_label"),
+            font=customtkinter.CTkFont(weight="bold")
+        )
+        label_option_label.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="w")
 
-            self.update_compression_options(self.engine_var.get())
+        label_options = [
+            "Nissan Confidential C",
+            "Nissan Confidential A",
+            "Nissan Confidential B"
+        ]
+        self.label_text_var = customtkinter.StringVar(value=label_options[0])
+        label_option_menu = customtkinter.CTkOptionMenu(
+            frame,
+            values=label_options,
+            variable=self.label_text_var
+        )
+        label_option_menu.grid(row=0, column=1, pady=5, sticky="w")
+
+    def _build_compress_options(self, frame):
+        frame.grid_columnconfigure(3, weight=1)
+
+        compress_option_label = customtkinter.CTkLabel(
+            frame,
+            text=translator.get_text("task_compress_all_images_engine_label"),
+            font=customtkinter.CTkFont(weight="bold")
+        )
+        compress_option_label.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="w")
+
+        self.engine_var = customtkinter.StringVar(value=translator.get_text("engine_pil"))
+        self.engine_menu = customtkinter.CTkOptionMenu(
+            frame,
+            values=[translator.get_text("engine_pil"), translator.get_text("engine_spire")],
+            variable=self.engine_var,
+            command=self.update_compression_options
+        )
+        self.engine_menu.grid(row=0, column=1, pady=5, sticky="w")
+
+        self.quality_label = customtkinter.CTkLabel(
+            frame,
+            text="",
+            font=customtkinter.CTkFont(weight="bold")
+        )
+        self.quality_label.grid(row=0, column=2, padx=(15, 5), pady=5, sticky="w")
+
+        self.quality_var = customtkinter.StringVar()
+        self.quality_entry = customtkinter.CTkEntry(
+            frame,
+            width=80,
+            textvariable=self.quality_var
+        )
+        self.quality_entry.grid(row=0, column=3, pady=5, sticky="w")
+
+        self.update_compression_options(self.engine_var.get())
+
+    def _reset_compress_state(self):
+        self.engine_var = None
+        self.engine_menu = None
+        self.quality_var = None
+        self.quality_entry = None
+        self.quality_label = None
         
     def update_compression_options(self, choice):
+        if not self.quality_label or not self.quality_entry or not self.quality_var:
+            return
+
         if choice == translator.get_text("engine_pil"):
             self.quality_label.configure(text="Chất lượng (1-95):")
             self.quality_entry.configure(placeholder_text="70")
@@ -162,12 +244,15 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
             }
         }
         
-        for widget in self.tasks_container.winfo_children(): widget.destroy()
-        self.tasks_vars = {} 
+        for widget in self.tasks_container.winfo_children():
+            widget.destroy()
+        self.tasks_vars = {}
+        self.task_option_frames = {}
+        self.task_option_pack_opts = {}
 
         for cat_key, tasks in tasks_structure.items():
             category_name = translator.get_text(cat_key)
-            
+
             category_label = customtkinter.CTkLabel(self.tasks_container, text=category_name, font=customtkinter.CTkFont(weight="bold"), anchor="w")
             category_label.pack(fill="x", padx=5, pady=(8, 0))
 
@@ -178,29 +263,40 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
                 cb = customtkinter.CTkCheckBox(task_frame, text=task_name, variable=var, onvalue="on", offvalue="off", command=self.on_task_changed)
                 cb.pack(anchor="w", padx=10, pady=2)
                 self.tasks_vars[task_id] = var
-        
+
+                option_frame = customtkinter.CTkFrame(task_frame, fg_color="transparent")
+                pack_opts = {"fill": "x", "padx": (35, 0), "pady": (0, 5), "anchor": "w"}
+                option_frame.pack(**pack_opts)
+                option_frame.pack_forget()
+                self.task_option_frames[task_id] = option_frame
+                self.task_option_pack_opts[task_id] = pack_opts
+
         self.update_master_checkbox_state()
         self.ok_button.configure(text=translator.get_text("run_button_dialog"))
         self.cancel_button.configure(text=translator.get_text("cancel_button_dialog"))
-        
-        self.update_idletasks()
-        self.geometry(f"570x{self.winfo_reqheight()}")
-        self.resizable(False, False)
 
-    def on_ok(self): 
+        self.resizable(False, False)
+        self._update_dialog_geometry()
+        self.check_options_visibility()
+
+    def on_ok(self):
         self.result = [k for k, v in self.tasks_vars.items() if v.get() == "on"]
-        
-        if "compress_all_images" in self.result:
-            self.engine_var = self.engine_menu.get()
-            self.quality_var = self.quality_var.get()
+
+        if "compress_all_images" in self.result and self.engine_var:
+            engine_value = self.engine_var.get()
+            quality_value = self.quality_var.get() if self.quality_var else None
         else:
-            self.engine_var = None
-            self.quality_var = None
+            engine_value = None
+            quality_value = None
 
         if "add_label" in self.result and self.label_text_var:
-            self.label_text_var = self.label_text_var.get()
+            label_value = self.label_text_var.get()
         else:
-            self.label_text_var = None
+            label_value = None
+
+        self.engine_var = engine_value
+        self.quality_var = quality_value
+        self.label_text_var = label_value
 
         self.destroy()
 
@@ -208,9 +304,20 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.result = []
         self.destroy()
 
-    def get_selected_tasks(self): 
+    def get_selected_tasks(self):
         self.master.wait_window(self)
         return self.result, self.engine_var, self.quality_var, self.label_text_var
+
+    def _update_dialog_geometry(self):
+        self.update_idletasks()
+
+        required_width = max(self._dialog_width, self.winfo_reqwidth())
+        required_height = self.winfo_reqheight()
+
+        max_height = self.winfo_screenheight() - 120
+        new_height = min(required_height, max_height)
+
+        self.geometry(f"{int(required_width)}x{int(new_height)}")
 
 class AppUI:
     def __init__(self, root, controller):
