@@ -50,7 +50,8 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.label_text_var = None
         self.task_option_frames = {}
         self.task_option_pack_opts = {}
-        
+        self._has_grab = False
+
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -84,6 +85,7 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.ok_button.pack(side="right", padx=(0, 10))
 
         self._min_dialog_width = 570
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
         self.update_text()
         self.after(0, self._finalize_dialog_setup)
 
@@ -93,6 +95,10 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
             self.transient(parent)
 
         self.deiconify()
+        try:
+            self.wait_visibility()
+        except tk.TclError:
+            pass
         self.lift()
         self.focus_force()
         self._apply_modal_grab()
@@ -100,6 +106,7 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
     def _apply_modal_grab(self):
         try:
             self.grab_set()
+            self._has_grab = True
         except tk.TclError:
             self.after(20, self._apply_modal_grab)
 
@@ -322,14 +329,14 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.quality_var = quality_value
         self.label_text_var = label_value
 
-        self.destroy()
+        self._close_dialog()
 
-    def on_cancel(self): 
+    def on_cancel(self):
         self.result = []
-        self.destroy()
+        self._close_dialog()
 
     def get_selected_tasks(self):
-        self.master.wait_window(self)
+        self.wait_window()
         return self.result, self.engine_var, self.quality_var, self.label_text_var
 
     def _update_dialog_geometry(self):
@@ -346,6 +353,17 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         new_height = min(required_height, max_height)
 
         self.geometry(f"{int(required_width)}x{int(new_height)}")
+
+    def _close_dialog(self):
+        if self._has_grab:
+            try:
+                self.grab_release()
+            except tk.TclError:
+                pass
+            finally:
+                self._has_grab = False
+        if self.winfo_exists():
+            self.destroy()
 
 class AppUI:
     def __init__(self, root, controller):
