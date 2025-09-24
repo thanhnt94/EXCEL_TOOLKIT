@@ -41,7 +41,6 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         super().__init__(parent)
         self.transient(parent); self.grab_set()
         self.tasks_vars, self.result = {}, []
-        self._dialog_width = 570
         self.engine_var = None
         self.engine_menu = None
         self.quality_var = None
@@ -275,8 +274,14 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.ok_button.configure(text=translator.get_text("run_button_dialog"))
         self.cancel_button.configure(text=translator.get_text("cancel_button_dialog"))
 
+
         self.resizable(False, False)
         self._update_dialog_geometry()
+
+        self.update_idletasks()
+        self.geometry(f"570x{self.winfo_reqheight()}")
+        self.resizable(False, False)
+
         self.check_options_visibility()
 
     def on_ok(self):
