@@ -140,6 +140,8 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
             if reset_callback:
                 reset_callback()
 
+        self._update_dialog_geometry()
+
     def _build_add_label_options(self, frame):
         frame.grid_columnconfigure(1, weight=1)
 
@@ -272,9 +274,14 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.ok_button.configure(text=translator.get_text("run_button_dialog"))
         self.cancel_button.configure(text=translator.get_text("cancel_button_dialog"))
 
+
+        self.resizable(False, False)
+        self._update_dialog_geometry()
+
         self.update_idletasks()
         self.geometry(f"570x{self.winfo_reqheight()}")
         self.resizable(False, False)
+
         self.check_options_visibility()
 
     def on_ok(self):
@@ -302,9 +309,20 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.result = []
         self.destroy()
 
-    def get_selected_tasks(self): 
+    def get_selected_tasks(self):
         self.master.wait_window(self)
         return self.result, self.engine_var, self.quality_var, self.label_text_var
+
+    def _update_dialog_geometry(self):
+        self.update_idletasks()
+
+        required_width = max(self._dialog_width, self.winfo_reqwidth())
+        required_height = self.winfo_reqheight()
+
+        max_height = self.winfo_screenheight() - 120
+        new_height = min(required_height, max_height)
+
+        self.geometry(f"{int(required_width)}x{int(new_height)}")
 
 class AppUI:
     def __init__(self, root, controller):
