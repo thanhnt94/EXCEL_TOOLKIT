@@ -7,6 +7,9 @@ import os
 import time
 import uuid
 import logging
+from dataclasses import dataclass, replace
+from typing import Dict, Optional, Tuple
+
 import pythoncom
 from PIL import Image, ImageGrab
 
@@ -21,6 +24,8 @@ msoBringToFront = 0
 msoSendToBack = 1
 msoBringForward = 2
 msoSendBackward = 3
+msoTrue = -1
+msoFalse = 0
 
 def _doevents_pulse():
     """Bơm message queue để COM không treo."""
@@ -98,6 +103,34 @@ def _snapshot_shape_props(shape):
         pass
     return props
 
+def _normalize_lock_value(value):
+    """Chuẩn hoá LockAspectRatio sang tuple (bool, hằng số mso)."""
+
+    if value is None:
+        return None, None
+
+    if isinstance(value, bool):
+        return value, msoTrue if value else msoFalse
+
+    try:
+        intval = int(value)
+    except (TypeError, ValueError):
+        return None, None
+
+    if intval == msoTrue:
+        return True, msoTrue
+    if intval == msoFalse:
+        return False, msoFalse
+
+    # Một số phiên bản COM trả về 1 thay vì -1
+    if intval == 1:
+        return True, msoTrue
+    if intval == 0:
+        return False, msoFalse
+
+    return None, None
+
+
 def _apply_props_to_picture(pic, props):
     """
     Áp lại các thuộc tính đã chụp cho ảnh mới chèn.
@@ -110,27 +143,53 @@ def _apply_props_to_picture(pic, props):
     except Exception as e:
         logging.warning(f"    -> Lỗi khi áp dụng tên: {e}")
 
+    lock_bool, lock_mso = _normalize_lock_value(props.get('lock_aspect'))
+
     try:
-        logging.debug("    -> Áp dụng vị trí và kích thước...")
+        logging.debug("    -> Áp dụng vị trí...")
         pic.left = props['left']
         pic.top = props['top']
+    except Exception as e:
+        logging.warning(f"    -> Lỗi khi áp dụng vị trí: {e}")
+
+    # Nếu ảnh cũ bị khoá tỉ lệ, Excel sẽ không cho đặt width/height độc lập.
+    # Ta tạm mở khoá (nếu cần) để đảm bảo kích thước khớp tuyệt đối.
+    temporary_unlock = False
+    if lock_bool:
+        try:
+            current_lock = pic.api.LockAspectRatio
+            if current_lock not in (msoFalse, 0):
+                pic.api.LockAspectRatio = msoFalse
+                temporary_unlock = True
+        except Exception as e:
+            logging.debug(f"    -> Không thể mở khoá tỉ lệ tạm thời: {e}")
+
+    try:
+        logging.debug("    -> Áp dụng kích thước...")
         pic.width = props['width']
         pic.height = props['height']
     except Exception as e:
-        logging.warning(f"    -> Lỗi khi áp dụng vị trí và kích thước: {e}")
+        logging.warning(f"    -> Lỗi khi áp dụng kích thước: {e}")
+
+    if temporary_unlock and lock_mso is not None:
+        try:
+            pic.api.LockAspectRatio = lock_mso
+        except Exception as e:
+            logging.warning(f"    -> Không thể khôi phục trạng thái khoá tỉ lệ ban đầu: {e}")
 
     try:
-        if props['rotation'] != 0:
+        if props['rotation']:
             logging.debug(f"    -> Áp dụng xoay với giá trị: {props['rotation']}...")
             api.Rotation = props['rotation']
     except Exception as e:
         logging.warning(f"    -> Lỗi khi áp dụng xoay: {e}")
 
-    try:
-        logging.debug("    -> Áp dụng khóa tỉ lệ...")
-        api.LockAspectRatio = props['lock_aspect']
-    except Exception as e:
-        logging.warning(f"    -> Lỗi khi áp dụng khóa tỉ lệ: {e}")
+    if lock_mso is not None and not temporary_unlock:
+        try:
+            logging.debug("    -> Áp dụng khóa tỉ lệ...")
+            api.LockAspectRatio = lock_mso
+        except Exception as e:
+            logging.warning(f"    -> Lỗi khi áp dụng khóa tỉ lệ: {e}")
 
     try:
         logging.debug("    -> Áp dụng placement...")
@@ -163,7 +222,133 @@ def _apply_props_to_picture(pic, props):
     except Exception as e:
         logging.warning(f"    -> Lỗi khi áp dụng hyperlink: {e}")
 
-def _export_and_replace(shape, sheet, quality=70, mode='auto', keep_dpi=96):
+@dataclass(frozen=True)
+class CompressionOptions:
+    """Tập hợp các tùy chọn nén ảnh.
+
+    Các trường được giữ đơn giản để vẫn tương thích với tham số cũ:
+    - ``mode``: chiến lược chọn định dạng đầu ra.
+    - ``jpeg_quality``/``jpeg_optimize``/``jpeg_progressive``: cấu hình JPEG.
+    - ``jpeg_background``: màu nền dùng để làm phẳng lớp alpha khi ép sang JPEG.
+    - ``png_optimize``/``png_colors``/``png_compress_level``: cấu hình PNG.
+    - ``webp_quality``/``webp_lossless``: cấu hình WebP (nếu được chọn).
+    - ``keep_dpi``: đặt DPI cho ảnh đầu ra; ``None`` để giữ nguyên.
+    - ``max_width``/``max_height``: thu nhỏ ảnh khi lớn hơn kích thước chỉ định.
+    - ``resize_filter``: bộ lọc nội suy (Pillow constant, ví dụ ``Image.LANCZOS``).
+    - ``strip_metadata``: loại bỏ EXIF/IPTC để giảm dung lượng.
+    """
+
+    mode: str = "auto"
+    jpeg_quality: int = 70
+    jpeg_optimize: bool = True
+    jpeg_progressive: bool = True
+    jpeg_background: Optional[Tuple[int, int, int]] = (255, 255, 255)
+    png_optimize: bool = True
+    png_colors: Optional[int] = 256
+    png_compress_level: int = 9
+    webp_quality: int = 75
+    webp_lossless: bool = False
+    keep_dpi: Optional[int] = 96
+    max_width: Optional[int] = None
+    max_height: Optional[int] = None
+    resize_filter: int = Image.LANCZOS
+    strip_metadata: bool = True
+
+    @staticmethod
+    def from_legacy(quality: int = 70, mode: str = "auto", keep_dpi: Optional[int] = 96, **kwargs) -> "CompressionOptions":
+        """Tạo ``CompressionOptions`` từ tham số cũ của ``compress_images``."""
+
+        opts = CompressionOptions(mode=mode, keep_dpi=keep_dpi, **kwargs)
+        if mode in ("jpeg", "auto"):
+            opts = replace(opts, jpeg_quality=quality)
+        elif mode == "png":
+            # Với PNG ta map quality -> số màu nếu chưa được set thủ công
+            if "png_colors" not in kwargs:
+                colors = max(16, min(256, int(quality / 100 * 256)))
+                opts = replace(opts, png_colors=colors)
+        elif mode == "webp":
+            opts = replace(opts, webp_quality=quality)
+        return opts
+
+
+def _prepare_image(img: Image.Image, opts: CompressionOptions) -> Tuple[Image.Image, str, Dict[str, object]]:
+    """Chuyển đổi ảnh gốc sang định dạng và tham số lưu phù hợp với ``opts``."""
+
+    img = img.copy()
+    if opts.strip_metadata:
+        try:
+            img.info.pop("exif", None)
+            if hasattr(img, "getexif"):
+                exif = img.getexif()
+                exif.clear()
+        except Exception:
+            pass
+
+    if opts.max_width or opts.max_height:
+        max_w = opts.max_width or img.width
+        max_h = opts.max_height or img.height
+        if img.width > max_w or img.height > max_h:
+            ratio_w = max_w / img.width
+            ratio_h = max_h / img.height
+            ratio = min(ratio_w, ratio_h)
+            new_size = (int(img.width * ratio), int(img.height * ratio))
+            if new_size[0] > 0 and new_size[1] > 0:
+                img = img.resize(new_size, opts.resize_filter)
+
+    mode = opts.mode.lower()
+    save_kwargs: Dict[str, object] = {}
+    if opts.keep_dpi:
+        save_kwargs["dpi"] = (opts.keep_dpi, opts.keep_dpi)
+
+    # Tự chọn định dạng nếu để auto.
+    if mode == "auto":
+        if img.mode in ("RGBA", "LA", "P") and getattr(img, "info", {}).get("transparency") is not None:
+            fmt = "PNG"
+        else:
+            fmt = "JPEG"
+    elif mode == "jpeg":
+        fmt = "JPEG"
+    elif mode == "png":
+        fmt = "PNG"
+    elif mode == "webp":
+        fmt = "WEBP"
+    else:
+        logging.warning(f"Mode '{opts.mode}' không hợp lệ, sử dụng 'auto'.")
+        return _prepare_image(img, replace(opts, mode="auto"))
+
+    if fmt == "JPEG":
+        if img.mode not in ("RGB", "L"):
+            background = opts.jpeg_background or (255, 255, 255)
+            if img.mode in ("RGBA", "LA"):
+                alpha = img.split()[-1]
+                base = Image.new("RGB", img.size, background)
+                base.paste(img.convert("RGB"), mask=alpha)
+                img = base
+            else:
+                img = img.convert("RGB")
+        save_kwargs.update(
+            quality=max(1, min(100, opts.jpeg_quality)),
+            optimize=opts.jpeg_optimize,
+            progressive=opts.jpeg_progressive,
+        )
+    elif fmt == "PNG":
+        if img.mode not in ("RGBA", "LA", "RGB", "L"):
+            img = img.convert("RGBA")
+        if opts.png_colors and img.mode not in ("L", "P"):
+            try:
+                img = img.convert("P", palette=Image.ADAPTIVE, colors=opts.png_colors)
+            except Exception:
+                pass
+        save_kwargs.update(optimize=opts.png_optimize, compress_level=max(0, min(9, opts.png_compress_level)))
+    elif fmt == "WEBP":
+        if img.mode not in ("RGB", "RGBA", "L"):
+            img = img.convert("RGB")
+        save_kwargs.update(quality=max(1, min(100, opts.webp_quality)), lossless=opts.webp_lossless, method=6)
+
+    return img, fmt, save_kwargs
+
+
+def _export_and_replace(shape, sheet, quality=70, mode='auto', keep_dpi=96, *, options: Optional[CompressionOptions] = None, **extra):
     """
     Trích xuất shape -> nén -> xoá shape cũ -> chèn lại ảnh -> khôi phục props.
     """
@@ -177,29 +362,20 @@ def _export_and_replace(shape, sheet, quality=70, mode='auto', keep_dpi=96):
 
     logging.debug("    -> Bắt đầu xử lý và lưu ảnh tạm thời...")
 
-    # Quyết định định dạng nén
-    fmt = 'JPEG'
-    if mode == 'png' or (mode == 'auto' and (img.mode in ('RGBA', 'LA'))):
-        fmt = 'PNG'
-    elif mode == 'jpeg' or mode == 'auto':
-        if img.mode in ('RGBA', 'LA'):
-            img = img.convert('RGB')
+    opts = options or CompressionOptions.from_legacy(quality=quality, mode=mode, keep_dpi=keep_dpi, **extra)
+    try:
+        prepared_img, fmt, save_kwargs = _prepare_image(img, opts)
+    except Exception as prep_err:
+        logging.error(f"    -> Lỗi khi chuẩn bị ảnh '{props['name']}': {prep_err}")
+        return None
 
     tmp_dir = os.path.join(os.getcwd(), "_tmp_excel_img")
     os.makedirs(tmp_dir, exist_ok=True)
     tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}.{fmt.lower()}")
 
     try:
-        if fmt == 'JPEG':
-            logging.debug(f"    -> Lưu ảnh tạm thời ở định dạng JPEG tại '{tmp_path}'...")
-            img.save(tmp_path, format='JPEG', quality=quality, optimize=True, dpi=(keep_dpi, keep_dpi))
-        else:
-            logging.debug(f"    -> Lưu ảnh tạm thời ở định dạng PNG tại '{tmp_path}'...")
-            try:
-                img_q = img.convert('P', palette=Image.ADAPTIVE, colors=256)
-                img_q.save(tmp_path, format='PNG', optimize=True, dpi=(keep_dpi, keep_dpi))
-            except Exception:
-                img.save(tmp_path, format='PNG', optimize=True, dpi=(keep_dpi, keep_dpi))
+        logging.debug(f"    -> Lưu ảnh tạm thời ở định dạng {fmt} tại '{tmp_path}' với tham số {save_kwargs}...")
+        prepared_img.save(tmp_path, format=fmt, **save_kwargs)
         logging.debug("    -> Đã lưu ảnh tạm thời thành công.")
     except Exception as e:
         logging.error(f"    -> Lỗi khi lưu ảnh tạm thời: {e}")
@@ -255,12 +431,24 @@ def _reorder_zorder_exact(sheet, saved_order_back_to_front):
             # Có thể tên bị đổi sau khi chèn lại; bỏ qua nếu không còn tồn tại.
             pass
 
-def compress_images(wb, quality=70, mode='auto', keep_dpi=96):
+def compress_images(
+    wb,
+    quality: int = 70,
+    mode: str = 'auto',
+    keep_dpi: Optional[int] = 96,
+    *,
+    compression_options: Optional[CompressionOptions] = None,
+    **kwargs,
+):
     """
     Nén tất cả ảnh (msoPicture/msoLinkedPicture) trong workbook:
     - Bảo toàn vị trí, kích thước, xoay, tỉ lệ, placement, tên, visible, alt text, hyperlink.
     - Khôi phục z-order để textbox/shape khác vẫn đè đúng.
     - Bỏ qua nhóm (msoGroup) để tránh phá vỡ group.
+
+    Tham số ``kwargs`` cho phép tuỳ biến sâu hơn (ví dụ ``max_width``, ``max_height``,
+    ``png_colors``, ``jpeg_progressive``...). Nếu đã khởi tạo ``compression_options`` thì
+    các giá trị trong ``kwargs`` sẽ được bỏ qua.
     """
     excel = wb.app.api
     prev_screen = excel.ScreenUpdating
@@ -277,6 +465,13 @@ def compress_images(wb, quality=70, mode='auto', keep_dpi=96):
     compressed = 0
     
     # Duyệt qua từng sheet hiển thị
+    options = compression_options or CompressionOptions.from_legacy(
+        quality=quality,
+        mode=mode,
+        keep_dpi=keep_dpi,
+        **kwargs,
+    )
+
     for sheet in wb.sheets:
         if getattr(sheet.api, 'Visible', -1) != -1:
             continue
@@ -323,7 +518,15 @@ def compress_images(wb, quality=70, mode='auto', keep_dpi=96):
 
                 logging.info(f"Đang nén ảnh '{nm}' trên sheet '{sheet.name}'...")
                 try:
-                    new_nm = _export_and_replace(shp, sheet, quality=quality, mode=mode, keep_dpi=keep_dpi)
+                    new_nm = _export_and_replace(
+                        shp,
+                        sheet,
+                        quality=quality,
+                        mode=mode,
+                        keep_dpi=keep_dpi,
+                        options=options,
+                        **kwargs,
+                    )
                     if new_nm:
                         compressed += 1
                         new_names_map[nm] = new_nm
