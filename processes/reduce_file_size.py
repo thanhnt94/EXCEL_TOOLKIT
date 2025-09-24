@@ -6,13 +6,13 @@ import logging
 import os
 from excel_controller import ExcelController
 
-def reduce_file_size(file_path):
+def reduce_file_size(file_path, *, image_engine="pil", image_quality=70):
     """
     Thực hiện một chuỗi các tác vụ để tối ưu và giảm dung lượng file Excel.
 
     Bao gồm các bước:
     1. Dọn dẹp định dạng ô thừa.
-    2. Nén tất cả hình ảnh.
+    2. Nén tất cả hình ảnh với engine & chất lượng tuỳ chọn.
     3. Làm mới và dọn dẹp cache của Pivot Table.
     """
     logging.info(f"Bắt đầu quy trình giảm dung lượng file cho: {os.path.basename(file_path)}")
@@ -25,8 +25,15 @@ def reduce_file_size(file_path):
             logging.info("  -> Bước 1/3: Dọn dẹp định dạng ô thừa...")
             controller.clear_excess_cell_formatting()
 
-            logging.info("  -> Bước 2/3: Nén tất cả hình ảnh...")
-            controller.compress_all_images()
+            logging.info(
+                "  -> Bước 2/3: Nén tất cả hình ảnh..."
+                f" (engine={image_engine}, quality={image_quality})"
+            )
+            controller.compress_all_images(
+                file_path,
+                engine=image_engine,
+                quality=image_quality
+            )
 
             logging.info("  -> Bước 3/3: Dọn dẹp Pivot Table caches...")
             controller.refresh_and_clean_pivot_caches()
