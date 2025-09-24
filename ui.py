@@ -39,7 +39,8 @@ class ToolTip:
 class TaskSelectionDialog(customtkinter.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
-        self.transient(parent); self.grab_set()
+        self.withdraw()
+        self._parent = parent
         self.tasks_vars, self.result = {}, []
         self.engine_var = None
         self.engine_menu = None
@@ -81,9 +82,26 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.cancel_button.pack(side="right")
         self.ok_button = customtkinter.CTkButton(button_frame, command=self.on_ok)
         self.ok_button.pack(side="right", padx=(0, 10))
-        
+
         self._min_dialog_width = 570
         self.update_text()
+        self.after(0, self._finalize_dialog_setup)
+
+    def _finalize_dialog_setup(self):
+        parent = getattr(self, "_parent", None)
+        if parent is not None:
+            self.transient(parent)
+
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        self._apply_modal_grab()
+
+    def _apply_modal_grab(self):
+        try:
+            self.grab_set()
+        except tk.TclError:
+            self.after(20, self._apply_modal_grab)
 
     def update_master_checkbox_state(self):
         all_tasks = self.tasks_vars.values()
