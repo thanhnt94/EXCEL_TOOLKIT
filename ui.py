@@ -82,6 +82,14 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
         self.ok_button = customtkinter.CTkButton(button_frame, command=self.on_ok)
         self.ok_button.pack(side="right", padx=(0, 10))
         
+        # Track the minimum dialog width so geometry recalculation never
+        # attempts to shrink the window below the original design width.
+        self._min_dialog_width = 570
+        # Store the last applied width so that we can keep the window centered
+        # when geometry updates are triggered while toggling task specific
+        # options.
+        self._current_dialog_width = self._min_dialog_width
+
         self.update_text()
 
     def update_master_checkbox_state(self):
@@ -316,13 +324,46 @@ class TaskSelectionDialog(customtkinter.CTkToplevel):
     def _update_dialog_geometry(self):
         self.update_idletasks()
 
-        required_width = max(self._dialog_width, self.winfo_reqwidth())
+        min_width = getattr(self, "_min_dialog_width", 570) or 570
+        required_width = max(min_width, self.winfo_reqwidth())
         required_height = self.winfo_reqheight()
 
         max_height = self.winfo_screenheight() - 120
         new_height = min(required_height, max_height)
 
-        self.geometry(f"{int(required_width)}x{int(new_height)}")
+        # Remember the applied width so we can keep the dialog centered.
+        self._current_dialog_width = int(required_width)
+
+        geometry = f"{int(required_width)}x{int(new_height)}"
+
+        placement = self._compute_center_geometry(required_width, new_height)
+        if placement:
+            geometry = f"{geometry}+{placement[0]}+{placement[1]}"
+
+        self.geometry(geometry)
+        self.minsize(int(min_width), int(min(new_height, max_height)))
+        self.lift()
+        self.focus_set()
+
+    def _compute_center_geometry(self, width, height):
+        if not self.master:
+            return None
+
+        try:
+            self.master.update_idletasks()
+            parent_width = self.master.winfo_width()
+            parent_height = self.master.winfo_height()
+            parent_x = self.master.winfo_rootx()
+            parent_y = self.master.winfo_rooty()
+        except tk.TclError:
+            return None
+
+        if not parent_width or not parent_height:
+            return None
+
+        x = parent_x + max((parent_width - width) // 2, 0)
+        y = parent_y + max((parent_height - height) // 2, 0)
+        return int(x), int(y)
 
 class AppUI:
     def __init__(self, root, controller):
